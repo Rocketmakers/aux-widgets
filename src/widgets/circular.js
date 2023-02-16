@@ -126,7 +126,7 @@ function drawSlice(a_from, a_to, r_inner, r_outer, pos, slice) {
  * Circular is a SVG group element containing two paths for displaying
  * numerical values in a circular manner. Circular is able to draw labels,
  * dots and markers and can show a hand. Circular e.g. is implemented by
- * {@link Clock} to draw hours, minutes and seconds.
+ * {@link Clock} to draw hours, minutes and seconds. Circular is based on {@link Range}.
  *
  * @class Circular
  *
@@ -208,6 +208,7 @@ export class Circular extends Widget {
       show_value: 'boolean',
       show_hand: 'boolean',
       show_labels: 'boolean',
+      show_dots: 'boolean',
       show_markers: 'boolean',
       x: 'number',
       y: 'number',
@@ -251,6 +252,7 @@ export class Circular extends Widget {
       show_value: true,
       show_hand: true,
       show_labels: true,
+      show_dots: true,
       show_markers: true,
       x: 0,
       y: 0,
@@ -303,7 +305,7 @@ export class Circular extends Widget {
         ) {
           const _dots = this._dots;
 
-          if (_dots) return;
+          if (!_dots) return;
 
           empty(_dots);
 
@@ -689,10 +691,10 @@ export class Circular extends Widget {
 
   draw(O, element) {
     addClass(element, 'aux-circular');
-    element.appendChild(this._dots);
     element.appendChild(this._base);
     element.appendChild(this._value);
     element.appendChild(this._markers);
+    element.appendChild(this._dots);
     element.appendChild(this._hand);
 
     super.draw(O, element);

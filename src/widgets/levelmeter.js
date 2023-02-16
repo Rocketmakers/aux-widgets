@@ -25,35 +25,12 @@ import { State } from './state.js';
 import { addClass, toggleClass } from '../utils/dom.js';
 import { effectiveValue } from '../modules/range.js';
 import { defineRender, defineMeasure, deferRenderNext } from '../renderer.js';
-
-function clearTimeout(to) {
-  if (to >= 0) window.clearTimeout(to);
-}
-
-function clipTimeout() {
-  const O = this.options;
-  if (!O.auto_clip || O.auto_clip < 0) return false;
-  clearTimeout(this.__cto);
-  this.__cto = window.setTimeout(this._reset_clip, O.auto_clip);
-}
-function valueTimeout() {
-  const peak_value = 0 | this.options.peak_value;
-  if (peak_value <= 0) return false;
-  clearTimeout(this.__lto);
-  this.__lto = window.setTimeout(this._reset_value, peak_value);
-}
-function topTimeout() {
-  const O = this.options;
-  if (!O.auto_hold || O.auto_hold < 0) return false;
-  clearTimeout(this.__tto);
-  this.__tto = window.setTimeout(this._reset_top, O.auto_hold);
-}
-function bottomTimeout() {
-  const O = this.options;
-  if (!O.auto_hold || O.auto_hold < 0) return false;
-  clearTimeout(this.__bto);
-  this.__bto = window.setTimeout(this._reset_bottom, O.auto_hold);
-}
+import {
+  createTimer,
+  startTimer,
+  destroyTimer,
+  cancelTimer,
+} from '../utils/timers.js';
 
 /**
  * LevelMeter is a fully functional meter bar displaying numerical values.
@@ -133,21 +110,17 @@ export class LevelMeter extends Meter {
   static get static_events() {
     return {
       set_auto_clip: function (value) {
-        if (this.__cto >= 0 && 0 | (value <= 0))
-          window.clearTimeout(this.__cto);
+        if (!(value > 0)) this._clip_timer = destroyTimer(this._clip_timer);
       },
       set_peak_value: function (value) {
-        if (this.__lto >= 0 && 0 | (value <= 0))
-          window.clearTimeout(this.__lto);
-        if (value === false) this.set('sync_value', this.options._sync_value);
-        else this.set('sync_value', false);
-      },
-      set_sync_value: function (v) {
-        this.set('_sync_value', v);
+        if (!(value > 0)) this._value_timer = destroyTimer(this._value_timer);
+        if (value !== false) this.set('sync_value', false);
       },
       set_auto_hold: function (value) {
-        if (this.__tto >= 0 && value === -1) window.clearTimeout(this.__tto);
-        if (this.__bto >= 0 && value === -1) window.clearTimeout(this.__bto);
+        if (!(value > 0)) {
+          this._top_timer = destroyTimer(this._top_timer);
+          this._bottom_timer = destroyTimer(this._bottom_timer);
+        }
       },
     };
   }
@@ -171,10 +144,10 @@ export class LevelMeter extends Meter {
   initialize(options) {
     /* track the age of the value option */
     super.initialize(options);
-    this._reset_value = this.resetValue.bind(this);
-    this._reset_clip = this.resetClip.bind(this);
-    this._reset_top = this.resetTop.bind(this);
-    this._reset_bottom = this.resetBottom.bind(this);
+    this._value_timer = createTimer(this.resetValue.bind(this));
+    this._clip_timer = createTimer(this.resetClip.bind(this));
+    this._top_timer = createTimer(this.resetTop.bind(this));
+    this._bottom_timer = createTimer(this.resetBottom.bind(this));
 
     /**
      * @member {HTMLDivElement} LevelMeter#element - The main DIV container.
@@ -185,6 +158,8 @@ export class LevelMeter extends Meter {
     if (O.top === false) O.top = O.value;
     if (O.bottom === false) O.bottom = O.value;
     if (O.falling < 0) O.falling = -O.falling;
+
+    if (O.peak_value !== false) this.set('peak_value', O.peak_value);
   }
 
   draw(O, element) {
@@ -212,6 +187,10 @@ export class LevelMeter extends Meter {
   }
 
   destroy() {
+    this._clip_timer = destroyTimer(this._clip_timer);
+    this._top_timer = destroyTimer(this._top_timer);
+    this._bottom_timer = destroyTimer(this._bottom_timer);
+    this._value_timer = destroyTimer(this._value_timer);
     this.removeChildNode(this.clip?.element);
     super.destroy();
   }
@@ -244,7 +223,7 @@ export class LevelMeter extends Meter {
    * @emits LevelMeter#resetvalue
    */
   resetValue() {
-    clearTimeout(this.__lto);
+    this._value_timer = cancelTimer(this._value_timer);
     this.set('value_label', this.effectiveValue());
     /**
      * Is fired when the value label was reset.
@@ -262,7 +241,7 @@ export class LevelMeter extends Meter {
    * @emits LevelMeter#resetclip
    */
   resetClip() {
-    clearTimeout(this.__cto);
+    this._clip_timer = cancelTimer(this._clip_timer);
     this.set('clip', false);
     /**
      * Is fired when the clipping LED was reset.
@@ -280,6 +259,7 @@ export class LevelMeter extends Meter {
    * @emits LevelMeter#resettop
    */
   resetTop() {
+    this._top_timer = cancelTimer(this._top_timer);
     this.set('top', this.effectiveValue());
     /**
      * Is fired when the top hold was reset.
@@ -297,6 +277,7 @@ export class LevelMeter extends Meter {
    * @emits LevelMeter#resetbottom
    */
   resetBottom() {
+    this._bottom_timer = cancelTimer(this._bottom_timer);
     this.set('bottom', this.effectiveValue());
     /**
      * Is fired when the bottom hold was reset.
@@ -392,8 +373,10 @@ export class LevelMeter extends Meter {
       if (falling) {
         const effectiveValue = this.effectiveValue();
 
-        if (base < effectiveValue && value < effectiveValue ||
-            base > effectiveValue && value > effectiveValue) {
+        if (
+          (base < effectiveValue && value < effectiveValue) ||
+          (base > effectiveValue && value > effectiveValue)
+        ) {
           return value;
         }
       }
@@ -405,48 +388,44 @@ export class LevelMeter extends Meter {
 
       if (O.auto_clip !== false && value >= O.clipping && !this.hasBase()) {
         this.set('clip', true);
-        clipTimeout.call(this);
+        if (O.auto_clip >= 0)
+          this._clip_timer = startTimer(this._clip_timer, O.auto_clip);
       }
-      if (
-        O.show_value &&
-        O.peak_value !== false &&
-        ((value > O.value_label && value > base) ||
-          (value < O.value_label && value < base))
-      ) {
-        clearTimeout(this.__lto);
-        this.set('value_label', value);
+
+      const peak_value = O.peak_value;
+
+      if (O.show_value && peak_value !== false) {
+        const value_label = O.value_label;
+
+        if (
+          (value > value_label && value > base) ||
+          (value < value_label && value < base)
+        ) {
+          this.set('value_label', value);
+          if (peak_value >= 0)
+            this._value_timer = startTimer(this._value_timer, peak_value);
+        }
       }
-      if (
-        O.show_value &&
-        O.peak_value !== false &&
-        ((value < O.value_label && value > base) ||
-          (value > O.value_label && value < base))
-      ) {
-        valueTimeout.call(this);
-      }
-      if (O.auto_hold !== false && O.show_hold && value > O.top) {
-        clearTimeout(this.__tto);
-        this.set('top', value);
-      }
-      if (O.auto_hold !== false && O.show_hold && value < O.top) {
-        topTimeout.call(this);
-      }
-      if (
-        O.auto_hold !== false &&
-        O.show_hold &&
-        value < O.bottom &&
-        this.hasBase()
-      ) {
-        clearTimeout(this.__bto);
-        this.set('bottom', value);
-      }
-      if (
-        O.auto_hold !== false &&
-        O.show_hold &&
-        value > O.bottom &&
-        this.hasBase()
-      ) {
-        bottomTimeout.call(this);
+
+      if (O.auto_hold !== false && O.show_hold) {
+        const auto_hold = O.auto_hold;
+        const top = O.top;
+
+        if (value >= top) {
+          if (auto_hold >= 0)
+            this._top_timer = startTimer(this._top_timer, auto_hold);
+          this.set('top', value);
+        }
+
+        if (this.hasBase()) {
+          const bottom = O.bottom;
+
+          if (value <= bottom) {
+            this.set('bottom', value);
+            if (auto_hold >= 0)
+              this._bottom_timer = startTimer(this._bottom_timer, auto_hold);
+          }
+        }
       }
     } else if (key === 'top' || key === 'bottom') {
       value = this.options.snap_module.snap(value);
